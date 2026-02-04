@@ -2,7 +2,7 @@ import io
 import os
 import re
 from typing import Dict, Any, List
-
+import requests
 import numpy as np
 import pandas as pd
 from fastapi import FastAPI, UploadFile, File, Query, HTTPException
@@ -17,7 +17,7 @@ from .core_logic import (
 )
 from .qdrant_store import (
     get_qdrant_client, recreate_collection, upsert_points, search,
-    PRIMARY_COLLECTION, ASSOC_COLLECTION
+    PRIMARY_COLLECTION, ASSOC_COLLECTION, l2_normalize
 )
 from .history_db import get_conn, reset_and_load_history, load_aggregates
 from dotenv import load_dotenv
@@ -75,6 +75,21 @@ def df_to_payloads(df: pd.DataFrame) -> List[Dict[str, Any]]:
         out.append(d)
     return out
 
+EMBEDDING_API_URL = os.getenv("EMBEDDING_API_URL", "").strip()
+
+def embed_remote(text: str) -> np.ndarray:
+    if not EMBEDDING_API_URL:
+        raise HTTPException(status_code=500, detail="EMBEDDING_API_URL not set")
+    resp = requests.post(
+        EMBEDDING_API_URL,
+        json={"text": text},
+        timeout=60
+    )
+    resp.raise_for_status()
+    vec = np.array(resp.json()["vector"], dtype=np.float32)
+    return l2_normalize(vec)  # ✅ force normalization
+
+
 
 # -------------------------
 # Health
@@ -100,8 +115,8 @@ def ingest_primary(
 
     model = get_model()
     texts = df.apply(embed_text_primary, axis=1).tolist()
-    vectors = model.encode(texts, normalize_embeddings=True, show_progress_bar=False).astype(np.float32)
-
+    vectors = model.encode(texts, normalize_embeddings=False, show_progress_bar=False).astype(np.float32)
+    vectors = l2_normalize(vectors)
     ids = df["_id"].astype(str).tolist()
     payloads = df_to_payloads(df.assign(candidate_text=texts))
 
@@ -141,8 +156,8 @@ def ingest_associate(
 
     model = get_model()
     texts = df.apply(embed_text_fallback, axis=1).tolist()
-    vectors = model.encode(texts, normalize_embeddings=True, show_progress_bar=False).astype(np.float32)
-
+    vectors = model.encode(texts, normalize_embeddings=False, show_progress_bar=False).astype(np.float32)
+    vectors = l2_normalize(vectors)  # ✅ force normalization
     ids = df["_id"].astype(str).tolist()
     payloads = df_to_payloads(df.assign(candidate_text=texts))
 
@@ -194,8 +209,7 @@ def suggest(req: SuggestRequest):
     primary_domain, top3_scores = score_domains(title)
     qtext = build_query_text(title, top3_scores)
 
-    model = get_model()
-    qvec = model.encode([qtext], normalize_embeddings=True, show_progress_bar=False)[0].astype(np.float32)
+    qvec = embed_remote(qtext)
 
     client = get_qdrant_client()
 
@@ -251,7 +265,7 @@ def suggest(req: SuggestRequest):
 
     cand_rows = []
     cand_rows.extend(hits_to_rows(primary_hits, "PRIMARY"))
-    cand_rows.extend(hits_to_rows(assoc_hits, "FALLBACK"))
+    cand_rows.extend(hits_to_rows(assoc_hits, "ASSOC"))
 
     if not cand_rows:
         return SuggestResponse(
