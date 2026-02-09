@@ -22,13 +22,23 @@ from .qdrant_store import (
 from .history_db import get_conn, reset_and_load_history, load_aggregates
 from dotenv import load_dotenv
 load_dotenv()
+from fastapi.middleware.cors import CORSMiddleware
 
 
 MODEL_NAME = os.getenv("MODEL_NAME", "sentence-transformers/all-mpnet-base-v2")
 SQLITE_PATH = os.getenv("SQLITE_PATH", "./history.db")
 
 app = FastAPI(title="Journal Suggestion API", version="1.0.0")
-
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # -------------------------
 # Helpers
@@ -138,8 +148,10 @@ def ingest_associate(
     file: UploadFile = File(...),
     reset: bool = Query(True, description="Drop & recreate collection before ingest"),
 ):
+    print("Reading associate editor file...")
     df_raw = read_any_upload(file)
     df = prepare_fallback(df_raw)
+    
 
     # For associate editor, you confirmed _id exists in your latest exports.
     # If your prepared fallback df doesn't carry _id, keep original df's _id mapping:

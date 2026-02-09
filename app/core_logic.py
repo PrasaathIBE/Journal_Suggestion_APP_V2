@@ -166,9 +166,36 @@ def prepare_primary(df: pd.DataFrame) -> pd.DataFrame:
     df = df.drop_duplicates("dedupe_key", keep="first").drop(columns=["dedupe_key"])
     return df
 
+# def prepare_fallback(df: pd.DataFrame) -> pd.DataFrame:
+#     df = df.copy()
+
+#     if "Journal" in df.columns and "Journal_Name" not in df.columns:
+#         df = df.rename(columns={"Journal": "Journal_Name"})
+
+#     if "Special_Issue_keywords" not in df.columns:
+#         if "Keywords" in df.columns:
+#             df["Special_Issue_keywords"] = df["Keywords"]
+#         else:
+#             df["Special_Issue_keywords"] = ""
+
+#     df["Journal_Name"] = df["Journal_Name"].map(normalize_text)
+#     df["Journal_Name_norm"] = df["Journal_Name"].map(normalize_key)
+#     df["Special_Issue_keywords"] = df["Special_Issue_keywords"].map(normalize_text)
+
+#     df = df[df["Journal_Name"] != ""]
+
+#     # Aggregate keywords per journal
+#     agg = df.groupby(["Journal_Name", "Journal_Name_norm"], as_index=False).agg(
+#         Special_Issue_keywords=("Special_Issue_keywords", safe_join_keywords)
+#     )
+#     agg["Special_Issue_Name"] = ""
+#     agg["Special_Issue_Name_norm"] = ""
+#     return agg
+
 def prepare_fallback(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
 
+    # Normalize column names
     if "Journal" in df.columns and "Journal_Name" not in df.columns:
         df = df.rename(columns={"Journal": "Journal_Name"})
 
@@ -178,19 +205,36 @@ def prepare_fallback(df: pd.DataFrame) -> pd.DataFrame:
         else:
             df["Special_Issue_keywords"] = ""
 
+    # Ensure optional columns exist (avoid KeyError)
+    for col in ["Journal_Website", "Index", "Journal_Login_Status", "APC"]:
+        if col not in df.columns:
+            df[col] = ""
+
+    # Normalize text
     df["Journal_Name"] = df["Journal_Name"].map(normalize_text)
     df["Journal_Name_norm"] = df["Journal_Name"].map(normalize_key)
     df["Special_Issue_keywords"] = df["Special_Issue_keywords"].map(normalize_text)
 
     df = df[df["Journal_Name"] != ""]
 
-    # Aggregate keywords per journal
-    agg = df.groupby(["Journal_Name", "Journal_Name_norm"], as_index=False).agg(
-        Special_Issue_keywords=("Special_Issue_keywords", safe_join_keywords)
+    # Aggregate per journal
+    agg = df.groupby(
+        ["Journal_Name", "Journal_Name_norm"],
+        as_index=False
+    ).agg(
+        Special_Issue_keywords=("Special_Issue_keywords", safe_join_keywords),
+        Journal_Website=("Journal_Website", "first"),
+        Index=("Index", "first"),
+        Journal_Login_Status=("Journal_Login_Status", "first"),
+        APC=("APC", "first"),
     )
+
+    # Keep fallback at journal level
     agg["Special_Issue_Name"] = ""
     agg["Special_Issue_Name_norm"] = ""
+
     return agg
+
 
 
 # =========================
